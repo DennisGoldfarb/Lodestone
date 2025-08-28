@@ -1,0 +1,10 @@
+{
+  "csv_path": "data/CSD_train.csv",
+  "batch_size": 32,
+  "lr": 0.001,
+  "d_model": 128,
+  "nhead": 4,
+  "num_layers": 2,
+  "run_dim": 32,
+  "max_epochs": 5
+}
