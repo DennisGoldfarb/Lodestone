@@ -8,7 +8,6 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import pytorch_lightning as pl
 
 AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
-# Special tokens representing modified residues or termini
 SPECIAL_TOKENS = ["camC", "oxM", "ac-"]
 VOCAB = AMINO_ACIDS + SPECIAL_TOKENS
 TOKEN_TO_IDX: Dict[str, int] = {tok: i for i, tok in enumerate(VOCAB)}
