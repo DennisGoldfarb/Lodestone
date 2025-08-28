@@ -2,7 +2,6 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from .data import VOCAB
@@ -79,8 +78,10 @@ class LodestoneLightningModule(pl.LightningModule):
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
         x, y, run_ids = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss = F.mse_loss(torch.softmax(preds_bias, dim=-1), y)
-        full_loss = F.mse_loss(torch.softmax(preds_full, dim=-1), y)
+        pred_bias_log = torch.log_softmax(preds_bias, dim=-1)
+        bias_loss = -(y * pred_bias_log).sum(dim=-1).mean()
+        pred_log = torch.log_softmax(preds_full, dim=-1)
+        full_loss = -(y * pred_log).sum(dim=-1).mean()
         loss = 0.9 * bias_loss + 0.1 * full_loss
         self.log("train_loss_epoch", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train_bias_loss_epoch", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
@@ -92,8 +93,10 @@ class LodestoneLightningModule(pl.LightningModule):
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
         x, y, run_ids = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss = F.mse_loss(torch.softmax(preds_bias, dim=-1), y)
-        full_loss = F.mse_loss(torch.softmax(preds_full, dim=-1), y)
+        pred_bias_log = torch.log_softmax(preds_bias, dim=-1)
+        bias_loss = -(y * pred_bias_log).sum(dim=-1).mean()
+        pred_log = torch.log_softmax(preds_full, dim=-1)
+        full_loss = -(y * pred_log).sum(dim=-1).mean()
         self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if len(self.val_examples) < 10:
