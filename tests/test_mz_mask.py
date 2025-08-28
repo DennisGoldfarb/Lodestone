@@ -4,7 +4,7 @@ import numpy as np
 from lodestone.data import PeptideDataModule, PeptideDataset
 
 
-def test_mz_mask(tmp_path):
+def test_mz_mask(tmp_path, capsys):
     df = pd.DataFrame(
         {
             "sequence": ["A", "AAAA"],
@@ -21,6 +21,10 @@ def test_mz_mask(tmp_path):
 
     dm = PeptideDataModule(str(csv_path), batch_size=2)
     dm.setup("fit")
+    out = capsys.readouterr().out
+    assert "run1" in out
+    assert "2 precursors" in out
+    assert "70.0% charges masked" in out
 
     dataset = PeptideDataset(pd.read_csv(csv_path), dm.run_mapping)
     batch = [dataset[0], dataset[1]]

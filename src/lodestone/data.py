@@ -271,6 +271,25 @@ class PeptideDataModule(pl.LightningDataModule):
             self.run_mapping[name]: rng for name, rng in ranges.items()
         }
 
+        # Print dataset statistics and masking percentage
+        num_charge_states = 5
+        for dataset_name, group in df.groupby("dataset"):
+            run_id = self.run_mapping[dataset_name]
+            min_mz, max_mz = self.run_mz_ranges[run_id]
+            total_precursors = len(group)
+            total_charges = total_precursors * num_charge_states
+            masked_charges = 0
+            for _, row in group.iterrows():
+                seq = row.iloc[0]
+                for charge_idx in range(1, num_charge_states + 1):
+                    mz = peptide_mz(seq, charge_idx)
+                    if not (min_mz <= mz <= max_mz):
+                        masked_charges += 1
+            pct_masked = (masked_charges / total_charges) * 100 if total_charges else 0.0
+            print(
+                f"{dataset_name}: {total_precursors} precursors, {pct_masked:.1f}% charges masked"
+            )
+
         dataset = PeptideDataset(df, self.run_mapping)
         n = len(dataset)
         n_train = int(0.7 * n)
