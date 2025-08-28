@@ -23,7 +23,11 @@ def main():
     os.environ.setdefault("WANDB_MODE", "offline")
     logger = WandbLogger(project="lodestone", log_model=False)
 
-    datamodule = PeptideDataModule(cfg["csv_path"], batch_size=cfg.get("batch_size", 32))
+    datamodule = PeptideDataModule(
+        cfg["csv_path"],
+        batch_size=cfg.get("batch_size", 32),
+        num_workers=cfg.get("num_workers", 0),
+    )
     datamodule.setup("fit")
 
     model = LodestoneLightningModule(

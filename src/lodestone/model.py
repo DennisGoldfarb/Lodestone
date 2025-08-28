@@ -81,7 +81,10 @@ class LodestoneLightningModule(pl.LightningModule):
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         if len(self.val_examples) < 10:
             self.val_examples.append(
-                (y[0].detach(), torch.softmax(preds.detach(), dim=-1)[0])
+                (
+                    y[0].detach().cpu(),
+                    torch.softmax(preds.detach(), dim=-1)[0].detach().cpu(),
+                )
             )
         return loss
 
