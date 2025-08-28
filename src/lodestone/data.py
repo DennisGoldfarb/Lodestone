@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import pytorch_lightning as pl
 
 AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
-SPECIAL_TOKENS = ["camC", "oxM", "ac-"]
+SPECIAL_TOKENS = ["camC", "oxM", "ac-", "nemC"]
 VOCAB = AMINO_ACIDS + SPECIAL_TOKENS
 TOKEN_TO_IDX: Dict[str, int] = {tok: i for i, tok in enumerate(VOCAB)}
 
@@ -26,6 +26,9 @@ def tokenize_sequence(seq: str) -> List[int]:
         elif seq.startswith("ac-", i):
             tokens.append(TOKEN_TO_IDX["ac-"])
             i += 3
+        elif seq.startswith("nemC", i):
+            tokens.append(TOKEN_TO_IDX["nemC"])
+            i += 4
         else:
             aa = seq[i]
             if aa not in TOKEN_TO_IDX:

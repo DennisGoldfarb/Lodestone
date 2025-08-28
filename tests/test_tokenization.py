@@ -30,3 +30,15 @@ def test_oxM_tokenization():
         TOKEN_TO_IDX['G'],
     ]
     assert indices == expected
+
+
+def test_nemC_tokenization():
+    seq = 'ACnemCG'
+    indices = tokenize_sequence(seq)
+    expected = [
+        TOKEN_TO_IDX['A'],
+        TOKEN_TO_IDX['C'],
+        TOKEN_TO_IDX['nemC'],
+        TOKEN_TO_IDX['G'],
+    ]
+    assert indices == expected
