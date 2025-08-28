@@ -8,6 +8,8 @@ from pytorch_lightning.loggers import WandbLogger
 from .data import PeptideDataModule
 from .model import LodestoneLightningModule
 
+os.environ["WANDB_DIR"] = "/scratch1/fs1/d.goldfarb/Lodestone/"
+os.environ["WANDB_CACHE_DIR"] = "/scratch1/fs1/d.goldfarb/Lodestone/"
 
 def parse_args():
     parser = ArgumentParser()
