@@ -1,0 +1,11 @@
+{
+  "name": "lodestone",
+  "build": {
+    "dockerfile": "../Dockerfile"
+  },
+  "workspaceFolder": "/workspace/Lodestone",
+  "settings": {},
+  "extensions": [
+    "ms-python.python"
+  ]
+}
