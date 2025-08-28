@@ -31,12 +31,25 @@ class LodestoneModel(nn.Module):
         self.pos_encoder = PositionalEncoding(d_model)
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.weight_head = nn.Linear(d_model, run_dim * num_charge)
+        # Predict three parameters of a split normal distribution (mu, sigma_left, sigma_right)
+        self.weight_head = nn.Linear(d_model, run_dim * 3)
         self.run_params = nn.Embedding(num_runs, run_dim)
-        self.k_factors = nn.Embedding(num_runs, num_charge)
+        self.k_factors = nn.Embedding(num_runs, 3)
         # Global bias applied to k-factor head to allow predictions without
         # any dataset specific knowledge.
-        self.k_factor_bias = nn.Parameter(torch.ones(num_charge))
+        self.k_factor_bias = nn.Parameter(torch.ones(3))
+        self.num_charge = num_charge
+        # Precompute charge states for constructing the distribution
+        self.register_buffer("charges", torch.arange(num_charge).float())
+
+    def _split_normal_logits(self, mu: torch.Tensor, sigma_l: torch.Tensor, sigma_r: torch.Tensor) -> torch.Tensor:
+        charges = self.charges.unsqueeze(0)
+        diff = charges - mu.unsqueeze(1)
+        left = charges <= mu.unsqueeze(1)
+        sigma = torch.where(left, sigma_l.unsqueeze(1), sigma_r.unsqueeze(1))
+        # Negative squared distance scaled by variance gives unnormalized log-probabilities
+        logits = -0.5 * (diff ** 2) / (sigma ** 2)
+        return logits
 
     def forward(
         self, x: torch.Tensor, run_ids: torch.Tensor, return_bias: bool = False
@@ -46,16 +59,26 @@ class LodestoneModel(nn.Module):
         x = self.pos_encoder(x)
         x = self.transformer(x)
         x = x.mean(dim=1)
-        weights = self.weight_head(x).view(x.size(0), -1, self.run_params.embedding_dim)
+        weights = self.weight_head(x).view(x.size(0), 3, self.run_params.embedding_dim)
         run_vec = self.run_params(run_ids).unsqueeze(-1)
         preds = torch.bmm(weights, run_vec).squeeze(-1)
         k_bias = self.k_factor_bias.unsqueeze(0)
         k_coeff = self.k_factors(run_ids)
-        preds_full = preds * (k_bias + k_coeff)
+        params_bias = preds * k_bias
+        params_full = preds * (k_bias + k_coeff)
+
+        def params_to_logits(params: torch.Tensor) -> torch.Tensor:
+            mu, sigma_l, sigma_r = params.chunk(3, dim=-1)
+            mu = torch.sigmoid(mu) * (self.num_charge - 1)
+            sigma_l = F.softplus(sigma_l) + 1e-6
+            sigma_r = F.softplus(sigma_r) + 1e-6
+            return self._split_normal_logits(mu, sigma_l, sigma_r)
+
+        logits_full = params_to_logits(params_full)
         if return_bias:
-            preds_bias = preds * k_bias
-            return preds_bias, preds_full
-        return preds_full
+            logits_bias = params_to_logits(params_bias)
+            return logits_bias, logits_full
+        return logits_full
 
 
 class LodestoneLightningModule(pl.LightningModule):
