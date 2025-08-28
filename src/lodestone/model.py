@@ -34,8 +34,13 @@ class LodestoneModel(nn.Module):
         self.weight_head = nn.Linear(d_model, run_dim * num_charge)
         self.run_params = nn.Embedding(num_runs, run_dim)
         self.k_factors = nn.Embedding(num_runs, num_charge)
+        # Global bias applied to k-factor head to allow predictions without
+        # any dataset specific knowledge.
+        self.k_factor_bias = nn.Parameter(torch.ones(num_charge))
 
-    def forward(self, x: torch.Tensor, run_ids: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, run_ids: torch.Tensor, return_bias: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
         # x: [B, L, V]
         x = self.embed(x)
         x = self.pos_encoder(x)
@@ -44,9 +49,13 @@ class LodestoneModel(nn.Module):
         weights = self.weight_head(x).view(x.size(0), -1, self.run_params.embedding_dim)
         run_vec = self.run_params(run_ids).unsqueeze(-1)
         preds = torch.bmm(weights, run_vec).squeeze(-1)
-        k = self.k_factors(run_ids)
-        preds = preds * k
-        return preds
+        k_bias = self.k_factor_bias.unsqueeze(0)
+        k_coeff = self.k_factors(run_ids)
+        preds_full = preds * (k_bias + k_coeff)
+        if return_bias:
+            preds_bias = preds * k_bias
+            return preds_bias, preds_full
+        return preds_full
 
 
 class LodestoneLightningModule(pl.LightningModule):
@@ -62,31 +71,39 @@ class LodestoneLightningModule(pl.LightningModule):
         )
         self.val_examples = []
 
-    def forward(self, x: torch.Tensor, run_ids: torch.Tensor) -> torch.Tensor:
-        return self.model(x, run_ids)
+    def forward(
+        self, x: torch.Tensor, run_ids: torch.Tensor, return_bias: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+        return self.model(x, run_ids, return_bias=return_bias)
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
         x, y, run_ids = batch
-        preds = self(x, run_ids)
-        loss = F.mse_loss(torch.softmax(preds, dim=-1), y)
-        self.log("train_loss_epoch", loss, on_step=False, on_epoch=True, prog_bar=True)
+        preds_bias, preds_full = self(x, run_ids, return_bias=True)
+        bias_loss = F.mse_loss(torch.softmax(preds_bias, dim=-1), y)
+        full_loss = F.mse_loss(torch.softmax(preds_full, dim=-1), y)
+        loss = 0.9 * bias_loss + 0.1 * full_loss
+        self.log("train_loss_epoch", full_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train_bias_loss_epoch", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if (self.global_step + 1) % 50 == 0:
-            self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+            self.log("train_loss", full_loss, on_step=True, on_epoch=False, prog_bar=True)
+            self.log("train_bias_loss", bias_loss, on_step=True, on_epoch=False, prog_bar=False)
         return loss
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
         x, y, run_ids = batch
-        preds = self(x, run_ids)
-        loss = F.mse_loss(torch.softmax(preds, dim=-1), y)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        preds_bias, preds_full = self(x, run_ids, return_bias=True)
+        bias_loss = F.mse_loss(torch.softmax(preds_bias, dim=-1), y)
+        full_loss = F.mse_loss(torch.softmax(preds_full, dim=-1), y)
+        self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if len(self.val_examples) < 10:
             self.val_examples.append(
                 (
                     y[0].detach().cpu(),
-                    torch.softmax(preds.detach(), dim=-1)[0].detach().cpu(),
+                    torch.softmax(preds_full.detach(), dim=-1)[0].detach().cpu(),
                 )
             )
-        return loss
+        return full_loss
 
     def on_validation_epoch_end(self):
         import matplotlib.pyplot as plt
