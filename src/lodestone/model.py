@@ -128,18 +128,6 @@ class LodestoneLightningModule(pl.LightningModule):
         if run_weights.size(1) >= 2:
             fig, ax = plt.subplots()
             ax.scatter(run_weights[:, 0], run_weights[:, 1])
-
-            # Annotate points with dataset names if available
-            if (
-                hasattr(self.trainer, "datamodule")
-                and self.trainer.datamodule is not None
-                and hasattr(self.trainer.datamodule, "run_mapping")
-            ):
-                inv_map = {idx: name for name, idx in self.trainer.datamodule.run_mapping.items()}
-                for idx, (x, y) in enumerate(run_weights[:, :2]):
-                    label = inv_map.get(idx, str(idx))
-                    ax.text(float(x), float(y), label)
-
             ax.set_xlabel("run_dim_0")
             ax.set_ylabel("run_dim_1")
             ax.set_title("Run parameter weights")
