@@ -123,5 +123,28 @@ class LodestoneLightningModule(pl.LightningModule):
                 break
         self.val_examples = []
 
+        # Scatter plot of the first two run_dim weights for each dataset
+        run_weights = self.model.run_params.weight.detach().cpu()
+        if run_weights.size(1) >= 2:
+            fig, ax = plt.subplots()
+            ax.scatter(run_weights[:, 0], run_weights[:, 1])
+
+            # Annotate points with dataset names if available
+            if (
+                hasattr(self.trainer, "datamodule")
+                and self.trainer.datamodule is not None
+                and hasattr(self.trainer.datamodule, "run_mapping")
+            ):
+                inv_map = {idx: name for name, idx in self.trainer.datamodule.run_mapping.items()}
+                for idx, (x, y) in enumerate(run_weights[:, :2]):
+                    label = inv_map.get(idx, str(idx))
+                    ax.text(float(x), float(y), label)
+
+            ax.set_xlabel("run_dim_0")
+            ax.set_ylabel("run_dim_1")
+            ax.set_title("Run parameter weights")
+            self.logger.experiment.log({"run_dim_scatter": wandb.Image(fig)}, commit=False)
+            plt.close(fig)
+
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
