@@ -42,13 +42,23 @@ class LodestoneModel(nn.Module):
         # Precompute charge states for constructing the distribution
         self.register_buffer("charges", torch.arange(num_charge).float())
 
-    def _split_normal_logits(self, mu: torch.Tensor, sigma_l: torch.Tensor, sigma_r: torch.Tensor) -> torch.Tensor:
-        charges = self.charges.unsqueeze(0)
-        diff = charges - mu.unsqueeze(1)
-        left = charges <= mu.unsqueeze(1)
-        sigma = torch.where(left, sigma_l.unsqueeze(1), sigma_r.unsqueeze(1))
-        # Negative squared distance scaled by variance gives unnormalized log-probabilities
-        logits = -0.5 * (diff ** 2) / (sigma ** 2)
+    def _split_normal_logits(
+        self, mu: torch.Tensor, sigma_l: torch.Tensor, sigma_r: torch.Tensor
+    ) -> torch.Tensor:
+        """Return unnormalized log-probabilities for discrete charge states.
+
+        Parameters are the mode ``mu`` and the left/right spreads ``sigma_l`` and
+        ``sigma_r`` of a split normal distribution.  The resulting logits are
+        shaped ``[batch, num_charge]`` so they can be compared directly against
+        target distributions without unwanted broadcasting.
+        """
+
+        charges = self.charges  # [num_charge]
+        diff = charges.unsqueeze(0) - mu.unsqueeze(-1)
+        left = charges.unsqueeze(0) <= mu.unsqueeze(-1)
+        sigma = torch.where(left, sigma_l.unsqueeze(-1), sigma_r.unsqueeze(-1))
+        # Negative squared distance scaled by variance gives unnormalized logits
+        logits = -0.5 * (diff**2) / (sigma**2)
         return logits
 
     def forward(
@@ -69,9 +79,9 @@ class LodestoneModel(nn.Module):
 
         def params_to_logits(params: torch.Tensor) -> torch.Tensor:
             mu, sigma_l, sigma_r = params.chunk(3, dim=-1)
-            mu = torch.sigmoid(mu) * (self.num_charge - 1)
-            sigma_l = F.softplus(sigma_l) + 1e-6
-            sigma_r = F.softplus(sigma_r) + 1e-6
+            mu = torch.sigmoid(mu.squeeze(-1)) * (self.num_charge - 1)
+            sigma_l = F.softplus(sigma_l.squeeze(-1)) + 1e-6
+            sigma_r = F.softplus(sigma_r.squeeze(-1)) + 1e-6
             return self._split_normal_logits(mu, sigma_l, sigma_r)
 
         logits_full = params_to_logits(params_full)
