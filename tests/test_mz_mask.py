@@ -1,0 +1,30 @@
+import pandas as pd
+import numpy as np
+
+from lodestone.data import PeptideDataModule, PeptideDataset
+
+
+def test_mz_mask(tmp_path):
+    df = pd.DataFrame(
+        {
+            "sequence": ["A", "AAAA"],
+            "1": [1.0, 0.0],
+            "2": [0.0, 1.0],
+            "3": [0.0, 0.0],
+            "4": [0.0, 0.0],
+            "5": [0.0, 0.0],
+            "dataset": ["run1", "run1"],
+        }
+    )
+    csv_path = tmp_path / "test.csv"
+    df.to_csv(csv_path, index=False)
+
+    dm = PeptideDataModule(str(csv_path), batch_size=2)
+    dm.setup("fit")
+
+    dataset = PeptideDataset(pd.read_csv(csv_path), dm.run_mapping)
+    batch = [dataset[0], dataset[1]]
+    x, y, run_ids, mask = dm.collate_fn(batch)
+
+    expected_mask = np.array([[1, 0, 0, 0, 0], [0, 1, 1, 0, 0]], dtype=float)
+    assert np.array_equal(np.asarray(mask), expected_mask)

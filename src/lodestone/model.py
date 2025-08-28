@@ -76,11 +76,20 @@ class LodestoneLightningModule(pl.LightningModule):
     ) -> Tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
         return self.model(x, run_ids, return_bias=return_bias)
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
-        x, y, run_ids = batch
+    def training_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+    ):
+        x, y, run_ids, mask = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss = F.mse_loss(torch.softmax(preds_bias, dim=-1), y)
-        full_loss = F.mse_loss(torch.softmax(preds_full, dim=-1), y)
+        bias_loss_all = F.mse_loss(
+            torch.softmax(preds_bias, dim=-1), y, reduction="none"
+        )
+        full_loss_all = F.mse_loss(
+            torch.softmax(preds_full, dim=-1), y, reduction="none"
+        )
+        mask = mask.float()
+        bias_loss = (bias_loss_all * mask).sum() / mask.sum()
+        full_loss = (full_loss_all * mask).sum() / mask.sum()
         loss = 0.9 * bias_loss + 0.1 * full_loss
         self.log("train_loss_epoch", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train_bias_loss_epoch", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
@@ -89,11 +98,20 @@ class LodestoneLightningModule(pl.LightningModule):
             self.log("train_bias_loss", bias_loss, on_step=True, on_epoch=False, prog_bar=False)
         return loss
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int):
-        x, y, run_ids = batch
+    def validation_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+    ):
+        x, y, run_ids, mask = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss = F.mse_loss(torch.softmax(preds_bias, dim=-1), y)
-        full_loss = F.mse_loss(torch.softmax(preds_full, dim=-1), y)
+        bias_loss_all = F.mse_loss(
+            torch.softmax(preds_bias, dim=-1), y, reduction="none"
+        )
+        full_loss_all = F.mse_loss(
+            torch.softmax(preds_full, dim=-1), y, reduction="none"
+        )
+        mask = mask.float()
+        bias_loss = (bias_loss_all * mask).sum() / mask.sum()
+        full_loss = (full_loss_all * mask).sum() / mask.sum()
         self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if len(self.val_examples) < 10:
