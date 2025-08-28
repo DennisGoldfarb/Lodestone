@@ -6,6 +6,6 @@
   "d_model": 128,
   "nhead": 4,
   "num_layers": 2,
-  "run_dim": 32,
-  "max_epochs": 5
+  "run_dim": 4,
+  "max_epochs": 100
 }

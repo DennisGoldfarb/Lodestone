@@ -20,7 +20,6 @@ def main():
     with open(args.config) as f:
         cfg = json.load(f)
 
-    os.environ.setdefault("WANDB_MODE", "offline")
     logger = WandbLogger(project="lodestone", log_model=False)
 
     datamodule = PeptideDataModule(
