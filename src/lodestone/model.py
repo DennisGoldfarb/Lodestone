@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from .data import VOCAB
+from .losses import symmetric_cross_entropy
 
 
 class PositionalEncoding(nn.Module):
@@ -117,8 +118,8 @@ class LodestoneLightningModule(pl.LightningModule):
     ):
         x, y, run_ids, mask, _ = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss_all = -(y * F.log_softmax(preds_bias, dim=-1))
-        full_loss_all = -(y * F.log_softmax(preds_full, dim=-1))
+        bias_loss_all = symmetric_cross_entropy(preds_bias, y)
+        full_loss_all = symmetric_cross_entropy(preds_full, y)
         mask = mask.float()
         bias_loss = (bias_loss_all * mask).sum() / mask.sum()
         full_loss = (full_loss_all * mask).sum() / mask.sum()
@@ -137,8 +138,8 @@ class LodestoneLightningModule(pl.LightningModule):
     ):
         x, y, run_ids, mask, seqs = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss_all = -(y * F.log_softmax(preds_bias, dim=-1))
-        full_loss_all = -(y * F.log_softmax(preds_full, dim=-1))
+        bias_loss_all = symmetric_cross_entropy(preds_bias, y)
+        full_loss_all = symmetric_cross_entropy(preds_full, y)
         mask = mask.float()
         bias_loss = (bias_loss_all * mask).sum() / mask.sum()
         full_loss = (full_loss_all * mask).sum() / mask.sum()
