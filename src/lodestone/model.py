@@ -153,6 +153,7 @@ class LodestoneLightningModule(pl.LightningModule):
                 (
                     seqs[0],
                     y[0].detach().cpu(),
+                    mask[0].detach().cpu(),
                     torch.softmax(preds_bias.detach(), dim=-1)[0].detach().cpu(),
                     torch.softmax(preds_full.detach(), dim=-1)[0].detach().cpu(),
                     log_p_bias,
@@ -172,6 +173,7 @@ class LodestoneLightningModule(pl.LightningModule):
         for (
             seq,
             y,
+            mask,
             p_bias,
             p_full,
             log_p_bias,
@@ -185,6 +187,7 @@ class LodestoneLightningModule(pl.LightningModule):
                 charges = range(1, y.size(-1) + 1)
                 print(f"Sequence: {seq}")
                 print(f"Target: {y.numpy()}")
+                print(f"Mask: {mask.numpy()}")
                 print(f"Bias predictions: {p_bias.numpy()}")
                 print(f"Full predictions: {p_full.numpy()}")
                 print(f"Bias log probs: {log_p_bias.numpy()}")
