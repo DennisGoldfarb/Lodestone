@@ -77,8 +77,12 @@ class LodestoneModel(nn.Module):
         def params_to_logits(params: torch.Tensor) -> torch.Tensor:
             mu, sigma_l, sigma_r = params.chunk(3, dim=-1)
             mu = torch.sigmoid(mu.squeeze(-1)) * (self.num_charge - 1)
-            sigma_l = F.softplus(sigma_l.squeeze(-1)) + 1e-6
-            sigma_r = F.softplus(sigma_r.squeeze(-1)) + 1e-6
+            # Clamp spreads after the softplus to avoid extremely sharp
+            # distributions that can cause numerical issues.  The floor of
+            # ``0.05`` is a heuristic chosen to give reasonable gradients
+            # while still allowing future tuning.
+            sigma_l = torch.clamp(F.softplus(sigma_l.squeeze(-1)), min=0.05)
+            sigma_r = torch.clamp(F.softplus(sigma_r.squeeze(-1)), min=0.05)
             return self._split_normal_logits(mu, sigma_l, sigma_r)
 
         logits_full = params_to_logits(params_full)
