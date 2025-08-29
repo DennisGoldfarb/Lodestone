@@ -38,8 +38,10 @@ class LodestoneModel(nn.Module):
         # Run-specific weights producing dataset dependent adjustments
         self.k_factor_head = nn.Embedding(num_runs, run_dim * 3)
         self.num_charge = num_charge
-        # Precompute charge states for constructing the distribution
-        self.register_buffer("charges", torch.arange(num_charge).float())
+        # Precompute charge states for constructing the distribution. Charge
+        # states start at 1 rather than 0 because the training data does not
+        # contain a zero-charge precursor.
+        self.register_buffer("charges", torch.arange(1, num_charge + 1).float())
 
     def _split_normal_logits(
         self, mu: torch.Tensor, sigma_l: torch.Tensor, sigma_r: torch.Tensor
@@ -76,7 +78,9 @@ class LodestoneModel(nn.Module):
 
         def params_to_logits(params: torch.Tensor) -> torch.Tensor:
             mu, sigma_l, sigma_r = params.chunk(3, dim=-1)
-            mu = torch.sigmoid(mu.squeeze(-1)) * (self.num_charge - 1)
+            # Map the unconstrained mode to the [1, num_charge] interval so that
+            # it aligns with the enumerated charge states above.
+            mu = torch.sigmoid(mu.squeeze(-1)) * (self.num_charge - 1) + 1
             sigma_l = F.softplus(sigma_l.squeeze(-1)) + 1e-6
             sigma_r = F.softplus(sigma_r.squeeze(-1)) + 1e-6
             return self._split_normal_logits(mu, sigma_l, sigma_r)
@@ -113,12 +117,8 @@ class LodestoneLightningModule(pl.LightningModule):
     ):
         x, y, run_ids, mask, _ = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss_all = F.mse_loss(
-            torch.softmax(preds_bias, dim=-1), y, reduction="none"
-        )
-        full_loss_all = F.mse_loss(
-            torch.softmax(preds_full, dim=-1), y, reduction="none"
-        )
+        bias_loss_all = -(y * F.log_softmax(preds_bias, dim=-1))
+        full_loss_all = -(y * F.log_softmax(preds_full, dim=-1))
         mask = mask.float()
         bias_loss = (bias_loss_all * mask).sum() / mask.sum()
         full_loss = (full_loss_all * mask).sum() / mask.sum()
@@ -137,12 +137,8 @@ class LodestoneLightningModule(pl.LightningModule):
     ):
         x, y, run_ids, mask, seqs = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss_all = F.mse_loss(
-            torch.softmax(preds_bias, dim=-1), y, reduction="none"
-        )
-        full_loss_all = F.mse_loss(
-            torch.softmax(preds_full, dim=-1), y, reduction="none"
-        )
+        bias_loss_all = -(y * F.log_softmax(preds_bias, dim=-1))
+        full_loss_all = -(y * F.log_softmax(preds_full, dim=-1))
         mask = mask.float()
         bias_loss = (bias_loss_all * mask).sum() / mask.sum()
         full_loss = (full_loss_all * mask).sum() / mask.sum()
