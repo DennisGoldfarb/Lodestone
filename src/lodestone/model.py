@@ -165,7 +165,7 @@ class LodestoneLightningModule(pl.LightningModule):
 
         for seq, y, p_bias, p_full, bias_loss, full_loss in self.val_examples:
             if (y > 0).sum() >= 2:
-                charges = range(y.size(-1))
+                charges = range(1, y.size(-1) + 1)
                 fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
                 panels = [
                     ("Bias only", p_bias, bias_loss),
