@@ -28,7 +28,8 @@ def test_mz_mask(tmp_path, capsys):
 
     dataset = PeptideDataset(pd.read_csv(csv_path), dm.run_mapping)
     batch = [dataset[0], dataset[1]]
-    x, y, run_ids, mask = dm.collate_fn(batch)
+    x, y, run_ids, mask, seqs = dm.collate_fn(batch)
 
     expected_mask = np.array([[1, 0, 0, 0, 0], [0, 1, 1, 0, 0]], dtype=float)
     assert np.array_equal(np.asarray(mask), expected_mask)
+    assert seqs == ["A", "AAAA"]

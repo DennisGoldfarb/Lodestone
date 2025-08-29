@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, List
 
 import torch
 import torch.nn as nn
@@ -31,12 +31,34 @@ class LodestoneModel(nn.Module):
         self.pos_encoder = PositionalEncoding(d_model)
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.weight_head = nn.Linear(d_model, run_dim * num_charge)
-        self.run_params = nn.Embedding(num_runs, run_dim)
-        self.k_factors = nn.Embedding(num_runs, num_charge)
-        # Global bias applied to k-factor head to allow predictions without
-        # any dataset specific knowledge.
-        self.k_factor_bias = nn.Parameter(torch.ones(num_charge))
+        # Project the sequence representation into a run-agnostic feature space
+        self.feature_head = nn.Linear(d_model, run_dim)
+        # Global bias predicting split-normal parameters independent of run
+        self.bias_head = nn.Linear(run_dim, 3)
+        # Run-specific weights producing dataset dependent adjustments
+        self.k_factor_head = nn.Embedding(num_runs, run_dim * 3)
+        self.num_charge = num_charge
+        # Precompute charge states for constructing the distribution
+        self.register_buffer("charges", torch.arange(num_charge).float())
+
+    def _split_normal_logits(
+        self, mu: torch.Tensor, sigma_l: torch.Tensor, sigma_r: torch.Tensor
+    ) -> torch.Tensor:
+        """Return unnormalized log-probabilities for discrete charge states.
+
+        Parameters are the mode ``mu`` and the left/right spreads ``sigma_l`` and
+        ``sigma_r`` of a split normal distribution.  The resulting logits are
+        shaped ``[batch, num_charge]`` so they can be compared directly against
+        target distributions without unwanted broadcasting.
+        """
+
+        charges = self.charges  # [num_charge]
+        diff = charges.unsqueeze(0) - mu.unsqueeze(-1)
+        left = charges.unsqueeze(0) <= mu.unsqueeze(-1)
+        sigma = torch.where(left, sigma_l.unsqueeze(-1), sigma_r.unsqueeze(-1))
+        # Negative squared distance scaled by variance gives unnormalized logits
+        logits = -0.5 * (diff**2) / (sigma**2)
+        return logits
 
     def forward(
         self, x: torch.Tensor, run_ids: torch.Tensor, return_bias: bool = False
@@ -46,16 +68,28 @@ class LodestoneModel(nn.Module):
         x = self.pos_encoder(x)
         x = self.transformer(x)
         x = x.mean(dim=1)
-        weights = self.weight_head(x).view(x.size(0), -1, self.run_params.embedding_dim)
-        run_vec = self.run_params(run_ids).unsqueeze(-1)
-        preds = torch.bmm(weights, run_vec).squeeze(-1)
-        k_bias = self.k_factor_bias.unsqueeze(0)
-        k_coeff = self.k_factors(run_ids)
-        preds_full = preds * (k_bias + k_coeff)
+        feats = self.feature_head(x)
+        params_bias = self.bias_head(feats)
+        k_weights = self.k_factor_head(run_ids).view(run_ids.size(0), 3, feats.size(1))
+        k_params = torch.bmm(k_weights, feats.unsqueeze(-1)).squeeze(-1)
+        params_full = params_bias + k_params
+
+        def params_to_logits(params: torch.Tensor) -> torch.Tensor:
+            mu, sigma_l, sigma_r = params.chunk(3, dim=-1)
+            mu = torch.sigmoid(mu.squeeze(-1)) * (self.num_charge - 1)
+            # Clamp spreads after the softplus to avoid extremely sharp
+            # distributions that can cause numerical issues.  The floor of
+            # ``0.05`` is a heuristic chosen to give reasonable gradients
+            # while still allowing future tuning.
+            sigma_l = torch.clamp(F.softplus(sigma_l.squeeze(-1)), min=0.05)
+            sigma_r = torch.clamp(F.softplus(sigma_r.squeeze(-1)), min=0.05)
+            return self._split_normal_logits(mu, sigma_l, sigma_r)
+
+        logits_full = params_to_logits(params_full)
         if return_bias:
-            preds_bias = preds * k_bias
-            return preds_bias, preds_full
-        return preds_full
+            logits_bias = params_to_logits(params_bias)
+            return logits_bias, logits_full
+        return logits_full
 
 
 class LodestoneLightningModule(pl.LightningModule):
@@ -77,9 +111,11 @@ class LodestoneLightningModule(pl.LightningModule):
         return self.model(x, run_ids, return_bias=return_bias)
 
     def training_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+        self,
+        batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str]],
+        batch_idx: int,
     ):
-        x, y, run_ids, mask = batch
+        x, y, run_ids, mask, _ = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
         bias_loss_all = F.mse_loss(
             torch.softmax(preds_bias, dim=-1), y, reduction="none"
@@ -99,9 +135,11 @@ class LodestoneLightningModule(pl.LightningModule):
         return loss
 
     def validation_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+        self,
+        batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str]],
+        batch_idx: int,
     ):
-        x, y, run_ids, mask = batch
+        x, y, run_ids, mask, seqs = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
         bias_loss_all = F.mse_loss(
             torch.softmax(preds_bias, dim=-1), y, reduction="none"
@@ -115,10 +153,16 @@ class LodestoneLightningModule(pl.LightningModule):
         self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if len(self.val_examples) < 10:
+            example_bias_loss = (bias_loss_all[0] * mask[0]).sum() / mask[0].sum()
+            example_full_loss = (full_loss_all[0] * mask[0]).sum() / mask[0].sum()
             self.val_examples.append(
                 (
+                    seqs[0],
                     y[0].detach().cpu(),
+                    torch.softmax(preds_bias.detach(), dim=-1)[0].detach().cpu(),
                     torch.softmax(preds_full.detach(), dim=-1)[0].detach().cpu(),
+                    float(example_bias_loss.detach()),
+                    float(example_full_loss.detach()),
                 )
             )
         return full_loss
@@ -127,28 +171,34 @@ class LodestoneLightningModule(pl.LightningModule):
         import matplotlib.pyplot as plt
         import wandb
 
-        for y, p in self.val_examples:
+        for seq, y, p_bias, p_full, bias_loss, full_loss in self.val_examples:
             if (y > 0).sum() >= 2:
                 charges = range(y.size(-1))
-                fig, ax = plt.subplots()
-                ax.bar(charges, y.numpy(), color="blue")
-                ax.bar(charges, -p.numpy(), color="orange")
-                ax.set_xlabel("Charge")
-                ax.set_ylabel("Abundance")
-                ax.set_title("Observed (top) vs Predicted (bottom)")
+                fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+                panels = [
+                    ("Bias only", p_bias, bias_loss),
+                    ("Run adjusted", p_full, full_loss),
+                ]
+                for ax, (title, pred, loss) in zip(axes, panels):
+                    ax.bar(charges, y.numpy(), color="blue")
+                    ax.bar(charges, -pred.numpy(), color="orange")
+                    ax.set_xlabel("Charge")
+                    ax.set_title(f"{title}\nloss={loss:.4f}")
+                axes[0].set_ylabel("Abundance")
+                fig.suptitle(f"Sequence: {seq}")
                 self.logger.experiment.log({"mirror_plot": wandb.Image(fig)}, commit=False)
                 plt.close(fig)
                 break
         self.val_examples = []
 
-        # Scatter plot of the first two run_dim weights for each dataset
-        run_weights = self.model.run_params.weight.detach().cpu()
-        if run_weights.size(1) >= 2:
+        # Scatter plot of the first two dimensions of the run-specific k-factor weights
+        run_weights = self.model.k_factor_head.weight.view(self.hparams.num_runs, 3, -1)
+        if run_weights.size(2) >= 2:
             fig, ax = plt.subplots()
-            ax.scatter(run_weights[:, 0], run_weights[:, 1])
-            ax.set_xlabel("run_dim_0")
-            ax.set_ylabel("run_dim_1")
-            ax.set_title("Run parameter weights")
+            ax.scatter(run_weights[:, 0, 0].cpu(), run_weights[:, 0, 1].cpu())
+            ax.set_xlabel("k_factor_dim_0")
+            ax.set_ylabel("k_factor_dim_1")
+            ax.set_title("Run k-factor weights")
             self.logger.experiment.log({"run_dim_scatter": wandb.Image(fig)}, commit=False)
             plt.close(fig)
 
