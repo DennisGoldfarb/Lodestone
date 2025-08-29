@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, List
 
 import torch
 import torch.nn as nn
@@ -107,9 +107,11 @@ class LodestoneLightningModule(pl.LightningModule):
         return self.model(x, run_ids, return_bias=return_bias)
 
     def training_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+        self,
+        batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str]],
+        batch_idx: int,
     ):
-        x, y, run_ids, mask = batch
+        x, y, run_ids, mask, _ = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
         bias_loss_all = F.mse_loss(
             torch.softmax(preds_bias, dim=-1), y, reduction="none"
@@ -129,9 +131,11 @@ class LodestoneLightningModule(pl.LightningModule):
         return loss
 
     def validation_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int
+        self,
+        batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str]],
+        batch_idx: int,
     ):
-        x, y, run_ids, mask = batch
+        x, y, run_ids, mask, seqs = batch
         preds_bias, preds_full = self(x, run_ids, return_bias=True)
         bias_loss_all = F.mse_loss(
             torch.softmax(preds_bias, dim=-1), y, reduction="none"
@@ -145,10 +149,16 @@ class LodestoneLightningModule(pl.LightningModule):
         self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if len(self.val_examples) < 10:
+            example_bias_loss = (bias_loss_all[0] * mask[0]).sum() / mask[0].sum()
+            example_full_loss = (full_loss_all[0] * mask[0]).sum() / mask[0].sum()
             self.val_examples.append(
                 (
+                    seqs[0],
                     y[0].detach().cpu(),
+                    torch.softmax(preds_bias.detach(), dim=-1)[0].detach().cpu(),
                     torch.softmax(preds_full.detach(), dim=-1)[0].detach().cpu(),
+                    float(example_bias_loss.detach()),
+                    float(example_full_loss.detach()),
                 )
             )
         return full_loss
@@ -157,15 +167,21 @@ class LodestoneLightningModule(pl.LightningModule):
         import matplotlib.pyplot as plt
         import wandb
 
-        for y, p in self.val_examples:
+        for seq, y, p_bias, p_full, bias_loss, full_loss in self.val_examples:
             if (y > 0).sum() >= 2:
                 charges = range(y.size(-1))
-                fig, ax = plt.subplots()
-                ax.bar(charges, y.numpy(), color="blue")
-                ax.bar(charges, -p.numpy(), color="orange")
-                ax.set_xlabel("Charge")
-                ax.set_ylabel("Abundance")
-                ax.set_title("Observed (top) vs Predicted (bottom)")
+                fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+                panels = [
+                    ("Bias only", p_bias, bias_loss),
+                    ("Run adjusted", p_full, full_loss),
+                ]
+                for ax, (title, pred, loss) in zip(axes, panels):
+                    ax.bar(charges, y.numpy(), color="blue")
+                    ax.bar(charges, -pred.numpy(), color="orange")
+                    ax.set_xlabel("Charge")
+                    ax.set_title(f"{title}\nloss={loss:.4f}")
+                axes[0].set_ylabel("Abundance")
+                fig.suptitle(f"Sequence: {seq}")
                 self.logger.experiment.log({"mirror_plot": wandb.Image(fig)}, commit=False)
                 plt.close(fig)
                 break

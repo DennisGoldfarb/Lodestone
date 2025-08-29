@@ -301,7 +301,7 @@ class PeptideDataModule(pl.LightningDataModule):
 
     def collate_fn(
         self, batch: List[PeptideRecord]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str]]:
         seqs = [tokenize_sequence(rec.sequence) for rec in batch]
         max_len = max(len(s) for s in seqs)
         padded = [s + [0] * (max_len - len(s)) for s in seqs]
@@ -309,6 +309,7 @@ class PeptideDataModule(pl.LightningDataModule):
         charges = torch.stack([rec.charges for rec in batch])
         run_ids_list = [rec.run_id for rec in batch]
         run_ids = torch.tensor(run_ids_list, dtype=torch.long)
+        seq_strings = [rec.sequence for rec in batch]
 
         # Compute m/z values and mask out-of-range charge states
         mz_vals = [
@@ -321,7 +322,7 @@ class PeptideDataModule(pl.LightningDataModule):
             mask_list.append([min_mz <= m <= max_mz for m in mz_vec])
         mask = torch.tensor(mask_list, dtype=torch.float32)
 
-        return one_hot_seqs, charges, run_ids, mask
+        return one_hot_seqs, charges, run_ids, mask, seq_strings
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
