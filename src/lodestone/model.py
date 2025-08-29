@@ -145,6 +145,8 @@ class LodestoneLightningModule(pl.LightningModule):
         self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if len(self.val_examples) < 10:
+            log_p_bias = F.log_softmax(preds_bias.detach(), dim=-1)[0].detach().cpu()
+            log_p_full = F.log_softmax(preds_full.detach(), dim=-1)[0].detach().cpu()
             example_bias_loss = (bias_loss_all[0] * mask[0]).sum() / mask[0].sum()
             example_full_loss = (full_loss_all[0] * mask[0]).sum() / mask[0].sum()
             self.val_examples.append(
@@ -153,6 +155,10 @@ class LodestoneLightningModule(pl.LightningModule):
                     y[0].detach().cpu(),
                     torch.softmax(preds_bias.detach(), dim=-1)[0].detach().cpu(),
                     torch.softmax(preds_full.detach(), dim=-1)[0].detach().cpu(),
+                    log_p_bias,
+                    log_p_full,
+                    bias_loss_all[0].detach().cpu(),
+                    full_loss_all[0].detach().cpu(),
                     float(example_bias_loss.detach()),
                     float(example_full_loss.detach()),
                 )
@@ -163,9 +169,30 @@ class LodestoneLightningModule(pl.LightningModule):
         import matplotlib.pyplot as plt
         import wandb
 
-        for seq, y, p_bias, p_full, bias_loss, full_loss in self.val_examples:
+        for (
+            seq,
+            y,
+            p_bias,
+            p_full,
+            log_p_bias,
+            log_p_full,
+            loss_terms_bias,
+            loss_terms_full,
+            bias_loss,
+            full_loss,
+        ) in self.val_examples:
             if (y > 0).sum() >= 2:
                 charges = range(1, y.size(-1) + 1)
+                print(f"Sequence: {seq}")
+                print(f"Target: {y.numpy()}")
+                print(f"Bias predictions: {p_bias.numpy()}")
+                print(f"Full predictions: {p_full.numpy()}")
+                print(f"Bias log probs: {log_p_bias.numpy()}")
+                print(f"Full log probs: {log_p_full.numpy()}")
+                print(f"Bias loss terms: {loss_terms_bias.numpy()}")
+                print(f"Full loss terms: {loss_terms_full.numpy()}")
+                print(f"Bias loss: {bias_loss:.4f}")
+                print(f"Full loss: {full_loss:.4f}")
                 fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
                 panels = [
                     ("Bias only", p_bias, bias_loss),
