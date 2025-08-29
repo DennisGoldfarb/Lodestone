@@ -8,6 +8,32 @@ import pytorch_lightning as pl
 from .data import VOCAB
 
 
+def spectral_angle_loss(
+    preds: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
+    """Compute spectral angle mapper loss between ``preds`` and ``targets``.
+
+    ``preds`` are raw logits which are converted to probabilities with a
+    softmax.  The inputs are masked so that only valid charge states contribute
+    to the loss.  Clamping is used to avoid undefined angles from numerical
+    precision issues.
+    """
+
+    # Convert logits to probabilities and apply the mask
+    probs = torch.softmax(preds, dim=-1) * mask
+    tgt = targets * mask
+
+    # Dot products and norms
+    dot = (probs * tgt).sum(dim=-1)
+    prob_norm = torch.linalg.norm(probs, dim=-1)
+    tgt_norm = torch.linalg.norm(tgt, dim=-1)
+    denom = (prob_norm * tgt_norm).clamp(min=1e-8)
+
+    # Clamp cosine similarity to valid range for arccos
+    cos_sim = (dot / denom).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+    return torch.arccos(cos_sim)
+
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
         super().__init__()
@@ -116,12 +142,12 @@ class LodestoneLightningModule(pl.LightningModule):
         batch_idx: int,
     ):
         x, y, run_ids, mask, _ = batch
-        preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss_all = -(y * F.log_softmax(preds_bias, dim=-1))
-        full_loss_all = -(y * F.log_softmax(preds_full, dim=-1))
         mask = mask.float()
-        bias_loss = (bias_loss_all * mask).sum() / mask.sum()
-        full_loss = (full_loss_all * mask).sum() / mask.sum()
+        preds_bias, preds_full = self(x, run_ids, return_bias=True)
+        bias_angles = spectral_angle_loss(preds_bias, y, mask)
+        full_angles = spectral_angle_loss(preds_full, y, mask)
+        bias_loss = bias_angles.mean()
+        full_loss = full_angles.mean()
         loss = 0.9 * bias_loss + 0.1 * full_loss
         self.log("train_loss_epoch", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train_bias_loss_epoch", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
@@ -136,17 +162,17 @@ class LodestoneLightningModule(pl.LightningModule):
         batch_idx: int,
     ):
         x, y, run_ids, mask, seqs = batch
-        preds_bias, preds_full = self(x, run_ids, return_bias=True)
-        bias_loss_all = -(y * F.log_softmax(preds_bias, dim=-1))
-        full_loss_all = -(y * F.log_softmax(preds_full, dim=-1))
         mask = mask.float()
-        bias_loss = (bias_loss_all * mask).sum() / mask.sum()
-        full_loss = (full_loss_all * mask).sum() / mask.sum()
+        preds_bias, preds_full = self(x, run_ids, return_bias=True)
+        bias_angles = spectral_angle_loss(preds_bias, y, mask)
+        full_angles = spectral_angle_loss(preds_full, y, mask)
+        bias_loss = bias_angles.mean()
+        full_loss = full_angles.mean()
         self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
         if len(self.val_examples) < 10:
-            example_bias_loss = (bias_loss_all[0] * mask[0]).sum() / mask[0].sum()
-            example_full_loss = (full_loss_all[0] * mask[0]).sum() / mask[0].sum()
+            example_bias_loss = bias_angles[0]
+            example_full_loss = full_angles[0]
             self.val_examples.append(
                 (
                     seqs[0],
