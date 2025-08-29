@@ -31,13 +31,12 @@ class LodestoneModel(nn.Module):
         self.pos_encoder = PositionalEncoding(d_model)
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        # Predict three parameters of a split normal distribution (mu, sigma_left, sigma_right)
-        self.weight_head = nn.Linear(d_model, run_dim * 3)
-        self.run_params = nn.Embedding(num_runs, run_dim)
-        self.k_factors = nn.Embedding(num_runs, 3)
-        # Global bias applied to k-factor head to allow predictions without
-        # any dataset specific knowledge.
-        self.k_factor_bias = nn.Parameter(torch.ones(3))
+        # Project the sequence representation into a run-agnostic feature space
+        self.feature_head = nn.Linear(d_model, run_dim)
+        # Global bias predicting split-normal parameters independent of run
+        self.bias_head = nn.Linear(run_dim, 3)
+        # Run-specific weights producing dataset dependent adjustments
+        self.k_factor_head = nn.Embedding(num_runs, run_dim * 3)
         self.num_charge = num_charge
         # Precompute charge states for constructing the distribution
         self.register_buffer("charges", torch.arange(num_charge).float())
@@ -69,13 +68,11 @@ class LodestoneModel(nn.Module):
         x = self.pos_encoder(x)
         x = self.transformer(x)
         x = x.mean(dim=1)
-        weights = self.weight_head(x).view(x.size(0), 3, self.run_params.embedding_dim)
-        run_vec = self.run_params(run_ids).unsqueeze(-1)
-        preds = torch.bmm(weights, run_vec).squeeze(-1)
-        k_bias = self.k_factor_bias.unsqueeze(0)
-        k_coeff = self.k_factors(run_ids)
-        params_bias = preds * k_bias
-        params_full = preds * (k_bias + k_coeff)
+        feats = self.feature_head(x)
+        params_bias = self.bias_head(feats)
+        k_weights = self.k_factor_head(run_ids).view(run_ids.size(0), 3, feats.size(1))
+        k_params = torch.bmm(k_weights, feats.unsqueeze(-1)).squeeze(-1)
+        params_full = params_bias + k_params
 
         def params_to_logits(params: torch.Tensor) -> torch.Tensor:
             mu, sigma_l, sigma_r = params.chunk(3, dim=-1)
@@ -174,14 +171,14 @@ class LodestoneLightningModule(pl.LightningModule):
                 break
         self.val_examples = []
 
-        # Scatter plot of the first two run_dim weights for each dataset
-        run_weights = self.model.run_params.weight.detach().cpu()
-        if run_weights.size(1) >= 2:
+        # Scatter plot of the first two dimensions of the run-specific k-factor weights
+        run_weights = self.model.k_factor_head.weight.view(self.hparams.num_runs, 3, -1)
+        if run_weights.size(2) >= 2:
             fig, ax = plt.subplots()
-            ax.scatter(run_weights[:, 0], run_weights[:, 1])
-            ax.set_xlabel("run_dim_0")
-            ax.set_ylabel("run_dim_1")
-            ax.set_title("Run parameter weights")
+            ax.scatter(run_weights[:, 0, 0].cpu(), run_weights[:, 0, 1].cpu())
+            ax.set_xlabel("k_factor_dim_0")
+            ax.set_ylabel("k_factor_dim_1")
+            ax.set_title("Run k-factor weights")
             self.logger.experiment.log({"run_dim_scatter": wandb.Image(fig)}, commit=False)
             plt.close(fig)
 
