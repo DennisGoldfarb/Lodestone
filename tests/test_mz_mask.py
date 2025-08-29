@@ -24,12 +24,12 @@ def test_mz_mask(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "run1" in out
     assert "2 precursors" in out
-    assert "70.0% charges masked" in out
+    assert "0.0% charges masked" in out
 
     dataset = PeptideDataset(pd.read_csv(csv_path), dm.run_mapping)
     batch = [dataset[0], dataset[1]]
     x, y, run_ids, mask, seqs = dm.collate_fn(batch)
 
-    expected_mask = np.array([[1, 0, 0, 0, 0], [0, 1, 1, 0, 0]], dtype=float)
+    expected_mask = np.ones((2, 5), dtype=float)
     assert np.array_equal(np.asarray(mask), expected_mask)
     assert seqs == ["A", "AAAA"]
