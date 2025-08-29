@@ -271,23 +271,11 @@ class PeptideDataModule(pl.LightningDataModule):
             self.run_mapping[name]: rng for name, rng in ranges.items()
         }
 
-        # Print dataset statistics and masking percentage
-        num_charge_states = 5
+        # Print dataset statistics; masking disabled so report 0% masked
         for dataset_name, group in df.groupby("dataset"):
-            run_id = self.run_mapping[dataset_name]
-            min_mz, max_mz = self.run_mz_ranges[run_id]
             total_precursors = len(group)
-            total_charges = total_precursors * num_charge_states
-            masked_charges = 0
-            for _, row in group.iterrows():
-                seq = row.iloc[0]
-                for charge_idx in range(1, num_charge_states + 1):
-                    mz = peptide_mz(seq, charge_idx)
-                    if not (min_mz <= mz <= max_mz):
-                        masked_charges += 1
-            pct_masked = (masked_charges / total_charges) * 100 if total_charges else 0.0
             print(
-                f"{dataset_name}: {total_precursors} precursors, {pct_masked:.1f}% charges masked"
+                f"{dataset_name}: {total_precursors} precursors, 0.0% charges masked"
             )
 
         dataset = PeptideDataset(df, self.run_mapping)
@@ -311,16 +299,8 @@ class PeptideDataModule(pl.LightningDataModule):
         run_ids = torch.tensor(run_ids_list, dtype=torch.long)
         seq_strings = [rec.sequence for rec in batch]
 
-        # Compute m/z values and mask out-of-range charge states
-        mz_vals = [
-            [peptide_mz(rec.sequence, z) for z in range(1, charges.size(-1) + 1)]
-            for rec in batch
-        ]
-        mask_list = []
-        for mz_vec, run_id in zip(mz_vals, run_ids_list):
-            min_mz, max_mz = self.run_mz_ranges[run_id]
-            mask_list.append([min_mz <= m <= max_mz for m in mz_vec])
-        mask = torch.tensor(mask_list, dtype=torch.float32)
+        # Masking temporarily disabled: treat all charge states as valid
+        mask = torch.ones_like(charges, dtype=torch.float32)
 
         return one_hot_seqs, charges, run_ids, mask, seq_strings
 
