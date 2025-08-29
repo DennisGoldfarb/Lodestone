@@ -40,7 +40,11 @@ def main():
         run_dim=cfg.get("run_dim", 32),
     )
 
-    trainer_args = {"max_epochs": cfg.get("max_epochs", 10), "logger": logger}
+    trainer_args = {
+        "max_epochs": cfg.get("max_epochs", 10),
+        "logger": logger,
+        "gradient_clip_val": cfg.get("gradient_clip_val", 1.0),
+    }
     for key in ["limit_train_batches", "limit_val_batches", "fast_dev_run"]:
         if key in cfg:
             trainer_args[key] = cfg[key]
