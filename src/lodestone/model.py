@@ -251,7 +251,8 @@ class LodestoneLightningModule(pl.LightningModule):
         2. In at least one of those datasets the peptide should have evidence for
            two or more charge states.
         3. Within that dataset at least two observed charges must individually
-           account for more than 25% of the total intensity.
+           account for more than 25% of the total intensity while also being
+           charge state 2 or higher.
 
         The mask tracks which charge states are valid for the example.  When a
         mask is unavailable we fall back to the target distribution ``y`` to
@@ -274,15 +275,18 @@ class LodestoneLightningModule(pl.LightningModule):
                 if mask_tensor.numel() == 0:
                     mask_tensor = None
 
+            charge_states = torch.arange(1, y_tensor.numel() + 1)
+
             if mask_tensor is not None:
                 observed_mask = mask_tensor > 0.5
-                observed = observed_mask.sum().item()
-                strong = ((y_tensor > 0.25) & observed_mask).sum().item()
             else:
-                observed = (y_tensor > 0).sum().item()
-                strong = (y_tensor > 0.25).sum().item()
+                observed_mask = y_tensor > 0
 
-            if observed >= 2 and strong >= 2:
+            strong_mask = y_tensor > 0.25
+            meets_charge_threshold = charge_states >= 2
+            qualifying = observed_mask & strong_mask & meets_charge_threshold
+
+            if qualifying.sum().item() >= 2:
                 return True
 
         return False
