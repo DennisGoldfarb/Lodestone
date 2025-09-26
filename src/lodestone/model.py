@@ -177,7 +177,10 @@ class LodestoneLightningModule(pl.LightningModule):
                     float(example_full_loss.detach()),
                     mask_cpu[i],
                 )
-                if len(entry) >= 2 and self.selected_sequence is None:
+                if (
+                    self.selected_sequence is None
+                    and self._sequence_is_shared_multi_charge(entry)
+                ):
                     self.selected_sequence = seq
         return full_loss
 
@@ -237,3 +240,39 @@ class LodestoneLightningModule(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+
+    def _sequence_is_shared_multi_charge(self, dataset_entries: dict[str, tuple]):
+        """Return True when sequence spans multiple datasets and is multi-charge.
+
+        The user wants the validation mirror plot peptide to satisfy two
+        conditions:
+
+        1. It must be observed in at least two distinct datasets.
+        2. In at least one of those datasets the peptide should have evidence for
+           two or more charge states.
+
+        The mask tracks which charge states are valid for the example.  When a
+        mask is unavailable we fall back to the target distribution ``y`` to
+        approximate the number of observed charge states.
+        """
+
+        if len(dataset_entries) < 2:
+            return False
+
+        for entry in dataset_entries.values():
+            if len(entry) < 6:
+                continue
+            y, _, _, _, _, mask = entry
+            mask_tensor = torch.as_tensor(mask)
+            if mask_tensor.numel() > 0:
+                observed = (mask_tensor > 0.5).sum().item()
+                if observed >= 2:
+                    return True
+
+            y_tensor = torch.as_tensor(y)
+            if y_tensor.numel() > 0:
+                observed = (y_tensor > 0).sum().item()
+                if observed >= 2:
+                    return True
+
+        return False
