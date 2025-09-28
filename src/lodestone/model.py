@@ -66,10 +66,13 @@ class LodestoneModel(nn.Module):
         self, x: torch.Tensor, run_ids: torch.Tensor, return_bias: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
         # x: [B, L, V]
+        valid_mask = x.sum(dim=-1) > 0
         x = self.embed(x)
         x = self.pos_encoder(x)
-        x = self.transformer(x)
-        x = x.mean(dim=1)
+        x = self.transformer(x, src_key_padding_mask=~valid_mask)
+        mask = valid_mask.unsqueeze(-1).type_as(x)
+        lengths = valid_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)
+        x = (x * mask).sum(dim=1) / lengths
         feats = self.feature_head(x)
         params_bias = self.bias_head(feats)
         k_weights = self.k_factor_head(run_ids).view(run_ids.size(0), 3, feats.size(1))
