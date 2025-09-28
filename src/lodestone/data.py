@@ -111,7 +111,9 @@ except Exception:  # pragma: no cover
 
 AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
 SPECIAL_TOKENS = ["camC", "oxM", "ac-", "nemC"]
-VOCAB = AMINO_ACIDS + SPECIAL_TOKENS
+PAD_TOKEN = "<pad>"
+PAD_IDX = 0
+VOCAB = [PAD_TOKEN] + AMINO_ACIDS + SPECIAL_TOKENS
 TOKEN_TO_IDX: Dict[str, int] = {tok: i for i, tok in enumerate(VOCAB)}
 
 # Monoisotopic masses of amino acids and special tokens (in Daltons)
@@ -207,7 +209,12 @@ def tokenize_sequence(seq: str) -> List[int]:
 
 def one_hot(indices: List[int]) -> torch.Tensor:
     eye = torch.eye(len(VOCAB))
-    return eye[indices]
+    encoded = eye[indices]
+    if indices:
+        mask_values = [0.0 if idx == PAD_IDX else 1.0 for idx in indices]
+        mask = torch.tensor(mask_values, dtype=encoded.dtype).unsqueeze(-1)
+        encoded = encoded * mask
+    return encoded
 
 
 @dataclass
@@ -304,7 +311,7 @@ class PeptideDataModule(pl.LightningDataModule):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str]]:
         seqs = [tokenize_sequence(rec.sequence) for rec in batch]
         max_len = max(len(s) for s in seqs)
-        padded = [s + [0] * (max_len - len(s)) for s in seqs]
+        padded = [s + [PAD_IDX] * (max_len - len(s)) for s in seqs]
         one_hot_seqs = torch.stack([one_hot(s) for s in padded])
         charges = torch.stack([rec.charges for rec in batch])
         run_ids_list = [rec.run_id for rec in batch]

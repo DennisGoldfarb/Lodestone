@@ -1,4 +1,7 @@
-import torch
+try:
+    import torch
+except Exception:  # pragma: no cover - fallback when torch unavailable
+    from lodestone.data import torch
 
 from lodestone.model import LodestoneModel
 
