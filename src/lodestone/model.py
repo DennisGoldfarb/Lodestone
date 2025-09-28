@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Tuple, List
 
 import torch
@@ -103,7 +104,9 @@ class LodestoneLightningModule(pl.LightningModule):
             run_dim=run_dim,
             num_runs=num_runs,
         )
-        self.val_examples = []
+        self.val_examples = {}
+        self.selected_sequence = None
+        self.run_id_to_name: dict[int, str] = {}
 
     def forward(
         self, x: torch.Tensor, run_ids: torch.Tensor, return_bias: bool = False
@@ -144,44 +147,94 @@ class LodestoneLightningModule(pl.LightningModule):
         full_loss = (full_loss_all * mask).sum() / mask.sum()
         self.log("val_loss", full_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_bias_loss", bias_loss, on_step=False, on_epoch=True, prog_bar=False)
-        if len(self.val_examples) < 10:
-            example_bias_loss = (bias_loss_all[0] * mask[0]).sum() / mask[0].sum()
-            example_full_loss = (full_loss_all[0] * mask[0]).sum() / mask[0].sum()
-            self.val_examples.append(
-                (
-                    seqs[0],
-                    y[0].detach().cpu(),
-                    torch.softmax(preds_bias.detach(), dim=-1)[0].detach().cpu(),
-                    torch.softmax(preds_full.detach(), dim=-1)[0].detach().cpu(),
+
+        if not self.run_id_to_name:
+            datamodule = getattr(self.trainer, "datamodule", None)
+            if datamodule is not None and hasattr(datamodule, "run_mapping"):
+                self.run_id_to_name = {idx: name for name, idx in datamodule.run_mapping.items()}
+
+        softmax_bias = torch.softmax(preds_bias.detach(), dim=-1).detach().cpu()
+        softmax_full = torch.softmax(preds_full.detach(), dim=-1).detach().cpu()
+        mask_cpu = mask.detach().cpu()
+
+        for i, seq in enumerate(seqs):
+            run_id = int(run_ids[i].item())
+            dataset_name = self.run_id_to_name.get(run_id, str(run_id))
+            mask_sum = mask[i].sum()
+            if mask_sum > 0:
+                example_bias_loss = (bias_loss_all[i] * mask[i]).sum() / mask_sum
+                example_full_loss = (full_loss_all[i] * mask[i]).sum() / mask_sum
+            else:
+                example_bias_loss = bias_loss_all[i].mean()
+                example_full_loss = full_loss_all[i].mean()
+
+            entry = self.val_examples.setdefault(seq, {})
+            if dataset_name not in entry:
+                entry[dataset_name] = (
+                    y[i].detach().cpu(),
+                    softmax_bias[i],
+                    softmax_full[i],
                     float(example_bias_loss.detach()),
                     float(example_full_loss.detach()),
+                    mask_cpu[i],
                 )
-            )
+                if (
+                    self.selected_sequence is None
+                    and self._sequence_is_shared_multi_charge(entry)
+                ):
+                    self.selected_sequence = seq
         return full_loss
 
     def on_validation_epoch_end(self):
         import matplotlib.pyplot as plt
         import wandb
 
-        for seq, y, p_bias, p_full, bias_loss, full_loss in self.val_examples:
-            if (y > 0).sum() >= 2:
-                charges = range(1, y.size(-1) + 1)
-                fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
-                panels = [
-                    ("Bias only", p_bias, bias_loss),
-                    ("Run adjusted", p_full, full_loss),
-                ]
-                for ax, (title, pred, loss) in zip(axes, panels):
-                    ax.bar(charges, y.numpy(), color="blue")
-                    ax.bar(charges, -pred.numpy(), color="orange")
-                    ax.set_xlabel("Charge")
-                    ax.set_title(f"{title}\nloss={loss:.4f}")
-                axes[0].set_ylabel("Abundance")
-                fig.suptitle(f"Sequence: {seq}")
+        if self.selected_sequence is not None:
+            seq = self.selected_sequence
+            dataset_entries = self.val_examples.get(seq, {})
+            if dataset_entries:
+                dataset_names = sorted(dataset_entries.keys())
+                num_datasets = len(dataset_names)
+                fig, axes = plt.subplots(
+                    num_datasets,
+                    2,
+                    figsize=(10, 4 * num_datasets),
+                    sharey=True,
+                    squeeze=False,
+                )
+                charges = range(1, next(iter(dataset_entries.values()))[0].size(-1) + 1)
+                for row_idx, dataset_name in enumerate(dataset_names):
+                    y, p_bias, p_full, bias_loss, full_loss, mask = dataset_entries[dataset_name]
+                    panels = [
+                        ("Bias only", p_bias, bias_loss),
+                        ("Run adjusted", p_full, full_loss),
+                    ]
+                    for col_idx, (title, pred, loss) in enumerate(panels):
+                        ax = axes[row_idx, col_idx]
+                        ax.bar(charges, y.numpy(), color="blue")
+                        ax.bar(charges, -pred.numpy(), color="orange")
+                        ax.set_xlabel("Charge")
+                        ax.set_title(f"{dataset_name} — {title}\nloss={loss:.4f}")
+                        if mask is not None:
+                            masked = mask.numpy().astype(bool)
+                            for charge_idx, valid in enumerate(masked, start=1):
+                                if not valid:
+                                    ax.axvspan(charge_idx - 0.5, charge_idx + 0.5, color="gray", alpha=0.2)
+                    axes[row_idx, 0].set_ylabel("Abundance")
+                fig.suptitle(f"Sequence present in multiple datasets: {seq}")
+                output_dir = Path("/storage1/fs1/d.goldfarb/Active/Projects/Lodestone")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                epoch = getattr(self.trainer, "current_epoch", self.current_epoch)
+                fig.savefig(
+                    output_dir / f"validation_mirror_plot_epoch_{epoch:04d}.pdf",
+                    format="pdf",
+                    bbox_inches="tight",
+                )
                 self.logger.experiment.log({"mirror_plot": wandb.Image(fig)}, commit=False)
                 plt.close(fig)
-                break
-        self.val_examples = []
+
+        self.val_examples = {}
+        self.selected_sequence = None
 
         # Scatter plot of the first two dimensions of the run-specific k-factor weights
         run_weights = self.model.k_factor_head.weight.view(self.hparams.num_runs, 3, -1)
@@ -196,3 +249,53 @@ class LodestoneLightningModule(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+
+    def _sequence_is_shared_multi_charge(self, dataset_entries: dict[str, tuple]):
+        """Return True when sequence spans multiple datasets and is multi-charge.
+
+        The user wants the validation mirror plot peptide to satisfy three
+        conditions:
+
+        1. It must be observed in at least two distinct datasets.
+        2. In at least one of those datasets the peptide should have evidence for
+           two or more charge states.
+        3. Within that dataset at least two observed charges must individually
+           account for more than 25% of the total intensity while also being
+           charge state 2 or higher.
+
+        The mask tracks which charge states are valid for the example.  When a
+        mask is unavailable we fall back to the target distribution ``y`` to
+        approximate the number of observed charge states as well as the
+        intensity contribution per charge.
+        """
+
+        if len(dataset_entries) < 2:
+            return False
+
+        for entry in dataset_entries.values():
+            if len(entry) < 6:
+                continue
+            y, _, _, _, _, mask = entry
+
+            y_tensor = torch.as_tensor(y)
+            mask_tensor = None
+            if mask is not None:
+                mask_tensor = torch.as_tensor(mask)
+                if mask_tensor.numel() == 0:
+                    mask_tensor = None
+
+            charge_states = torch.arange(1, y_tensor.numel() + 1)
+
+            if mask_tensor is not None:
+                observed_mask = mask_tensor > 0.5
+            else:
+                observed_mask = y_tensor > 0
+
+            strong_mask = y_tensor > 0.25
+            meets_charge_threshold = charge_states >= 2
+            qualifying = observed_mask & strong_mask & meets_charge_threshold
+
+            if qualifying.sum().item() >= 2:
+                return True
+
+        return False
