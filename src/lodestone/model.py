@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Tuple, List
 
 import torch
@@ -221,6 +222,14 @@ class LodestoneLightningModule(pl.LightningModule):
                                     ax.axvspan(charge_idx - 0.5, charge_idx + 0.5, color="gray", alpha=0.2)
                     axes[row_idx, 0].set_ylabel("Abundance")
                 fig.suptitle(f"Sequence present in multiple datasets: {seq}")
+                output_dir = Path("/storage1/fs1/d.goldfarb/Active/Projects/Lodestone")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                epoch = getattr(self.trainer, "current_epoch", self.current_epoch)
+                fig.savefig(
+                    output_dir / f"validation_mirror_plot_epoch_{epoch:04d}.pdf",
+                    format="pdf",
+                    bbox_inches="tight",
+                )
                 self.logger.experiment.log({"mirror_plot": wandb.Image(fig)}, commit=False)
                 plt.close(fig)
 
